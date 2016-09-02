@@ -209,7 +209,7 @@ class DataCollector(object):
                             cmd_specs = self._parse_command_spec(spec, conf['pre_commands'])
                             for s in cmd_specs:
                                 cmd_spec = InsightsCommand(s, exclude, self.mountpoint, self.target_name)
-                                self.archive.add_to_archive(cmd_spec)
+                                self.archive.add_to_archive(cmd_spec, specname)
             except LookupError:
                 logger.debug('Target type %s not found in spec %s. Skipping...', self.target_type, specname)
                 continue

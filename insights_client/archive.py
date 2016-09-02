@@ -11,6 +11,10 @@ import logging
 from utilities import determine_hostname, _expand_paths, write_data_to_file
 from constants import InsightsConstants as constants
 from insights_spec import InsightsFile, InsightsCommand
+from falafel.core import plugins, context, ComputedMeta, mapper
+from collections import defaultdict
+
+plugins.load("falafel.mappers")
 
 logger = logging.getLogger(constants.app_name)
 
@@ -28,13 +32,14 @@ class InsightsArchive(object):
         Create temp dir, archive dir, and command dir
         """
         self.tmp_dir = tempfile.mkdtemp(prefix='/var/tmp/')
-        name = determine_hostname(target_name)
+        self.hostname = determine_hostname(target_name)
         self.archive_name = ("insights-%s-%s" %
-                             (name,
+                             (self.hostname,
                               time.strftime("%Y%m%d%H%M%S")))
         self.archive_dir = self.create_archive_dir()
         self.cmd_dir = self.create_command_dir()
         self.compressor = compressor
+        self.mapper_output = defaultdict(list)
 
     def create_archive_dir(self):
         """
@@ -109,10 +114,18 @@ class InsightsArchive(object):
             "none": ""
         }.get(compressor, "z")
 
+    def write_mapper_output(self):
+        archive_path = os.path.join(self.archive_dir, "output.json")
+        serialized_data = mapper.serialize({
+            self.hostname: self.mapper_output
+        })
+        write_data_to_file(serialized_data, archive_path)
+
     def create_tar_file(self, full_archive=False):
         """
         Create tar file to be compressed
         """
+        self.write_mapper_output()
         tar_file_name = os.path.join(self.tmp_dir, self.archive_name)
         ext = "" if self.compressor == "none" else ".%s" % self.compressor
         tar_file_name = tar_file_name + ".tar" + ext
@@ -143,7 +156,7 @@ class InsightsArchive(object):
         logger.debug("Deleting: " + self.archive_dir)
         shutil.rmtree(self.archive_dir, True)
 
-    def add_to_archive(self, spec):
+    def add_to_archive(self, spec, name=None):
         '''
         Add files and commands to archive
         Use InsightsSpec.get_output() to get data
@@ -159,6 +172,25 @@ class InsightsArchive(object):
         output = spec.get_output()
         if output:
             write_data_to_file(output, archive_path)
+            if name:
+                self.execute_mappers(name, output, archive_path)
+
+    def execute_mappers(self, name, output, path):
+        if name in plugins.MAPPERS:
+            for m in plugins.MAPPERS.get(name):
+                ctx = context.Context(content=output.splitlines(), path=path)
+                try:
+                    if isinstance(m, ComputedMeta):
+                        o = m.parse_context(ctx)
+                    else:
+                        o = m(ctx)
+                except:
+                    import traceback
+                    traceback.print_exc()
+                    pass
+                else:
+                    if o:
+                        self.mapper_output[m].append(o)
 
     def add_metadata_to_archive(self, metadata, meta_path):
         '''
